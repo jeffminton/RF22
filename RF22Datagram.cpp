@@ -31,6 +31,12 @@ void RF22Datagram::setThisAddress(uint8_t thisAddress)
     setHeaderFrom(_thisAddress);
 }
 
+uint8_t RF22Datagram::getThisAddress()
+{
+    return _thisAddress;
+}
+
+
 boolean RF22Datagram::sendto(uint8_t* buf, uint8_t len, uint8_t address)
 {
     setHeaderTo(address);

@@ -8,12 +8,15 @@
 #define RF22Mesh_h
 
 #include <RF22Router.h>
+#include <errno.h>
 
 // Types of RF22Mesh message, used to set msgType in the RF22MeshHeader
 #define RF22_MESH_MESSAGE_TYPE_APPLICATION                    0
 #define RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_REQUEST        1
 #define RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_RESPONSE       2
 #define RF22_MESH_MESSAGE_TYPE_ROUTE_FAILURE                  3
+
+#define NOFUNC
 
 /////////////////////////////////////////////////////////////////////
 /// \class RF22Mesh RF22Mesh.h <RF22Mesh.h>
@@ -102,32 +105,44 @@ public:
     #define RF22_MESH_MAX_MESSAGE_LEN (RF22_ROUTER_MAX_MESSAGE_LEN - sizeof(RF22Mesh::MeshMessageHeader))
 
     /// Structure of the basic RF22Mesh header.
+    //2B - unalloc
     typedef struct
     {
 	uint8_t             msgType;  ///< Type of RF22Mesh message, one of RF22_MESH_MESSAGE_TYPE_*
+        uint8_t             frag : 4;
+        uint8_t             seqno : 4;
     } MeshMessageHeader;
 
     /// Signals an application layer message for the caller of RF22Mesh
+    //3B - unalloc
     typedef struct
     {
-	MeshMessageHeader   header; ///< msgType = RF22_MESH_MESSAGE_TYPE_APPLICATION 
+        MeshMessageHeader   header; ///< msgType = RF22_MESH_MESSAGE_TYPE_APPLICATION 
 	uint8_t             data[RF22_MESH_MAX_MESSAGE_LEN]; ///< Applicaiotn layer payload data
     } MeshApplicationMessage;
 
     /// Signals a route discovery request or reply
     /// At present only supports physical dest addresses of length 1 octet
+    //5B - unalloc
     typedef struct
     {
+        //2B
 	MeshMessageHeader   header; ///< msgType = RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_*
-	uint8_t             destlen; ///< Reserved. Must be 1.g
-	uint8_t             dest;   ///< The address of the destination node whose route is being sought
-	uint8_t             route[RF22_MESH_MAX_MESSAGE_LEN - 1]; ///< List of node addresses visited so far. Length is implcit
+	//1B
+        uint8_t             destlen; ///< Reserved. Must be 1.g
+	//1B
+        uint8_t             dest;   ///< The address of the destination node whose route is being sought
+	//1B
+        uint8_t             route[RF22_MESH_MAX_MESSAGE_LEN - 1]; ///< List of node addresses visited so far. Length is implcit
     } MeshRouteDiscoveryMessage;
 
     /// Signals a route failure
+    //3B - unalloc
     typedef struct
     {
+        //2B
 	MeshMessageHeader   header; ///< msgType = RF22_MESH_MESSAGE_TYPE_ROUTE_FAILURE
+        //1B
 	uint8_t             dest; ///< The address of the destination towards which the route failed
     } MeshRouteFailureMessage;
 
@@ -137,6 +152,12 @@ public:
     /// accessing it. Defaults to the normal SS pin for your Arduino (D10 for Diecimila, Uno etc, D53 for Mega)
     /// \param[in] interrupt The interrupt number to use. Default is interrupt 0 (Arduino input pin 2)
     RF22Mesh(uint8_t thisAddress = 0, uint8_t slaveSelectPin = SS, uint8_t interrupt = 0);
+
+
+    /// Initialises this instance and the radio module connected to it. and gets an address from the address server if address is 0
+    /// Overrides the init() function in RF22.
+    /// Internally calls the RF22Router::init method
+    boolean init();
 
     /// Sends a message to the destination node. Initialises the RF22Router message header 
     /// (the SOURCE address is set to the address of this node, HOPS to 0) and calls 
@@ -193,6 +214,21 @@ public:
     /// \return true if a valid message was copied to buf
     boolean recvfromAckTimeout(uint8_t* buf, uint8_t* len,  uint16_t timeout, uint8_t* source = NULL, uint8_t* dest = NULL, uint8_t* id = NULL, uint8_t* flags = NULL);
 
+    /// Get an address from the mesh address server and set the server address
+    uint8_t get_address();
+
+    //4B - unloc
+    typedef enum message_type {
+        ADDRESS_REQUEST,
+        SEND_COMMAND_REQ,
+        COMMAND,
+        SEND_COMMAND_RESP,
+        COMMAND_ACK,
+        SYNC_KEY,
+        SYNC_IV,
+        ADDRESS_GRANT
+    } message_type_t;
+
 protected:
 
     /// Internal function that inspects messages being received and adjusts the routing table if necessary.
@@ -227,9 +263,22 @@ protected:
     /// \return true if the physical address of this node is identical to address
     virtual boolean isPhysicalAddress(uint8_t* address, uint8_t addresslen);
 
+    /// Clear all elements of a buffer to the size passed in
+    /// \param[in] buf the buffer to clear
+    /// \param[in] size the size of the buffer passed in
+    void clear_buf( uint8_t *buf, int size );
+
+
+    /// Address servers address
+    //1B
+    uint8_t server_address;
+
 private:
     /// Temporary mesage buffer
+
     static uint8_t _tmpMessage[RF22_ROUTER_MAX_MESSAGE_LEN];
+
+    static uint8_t recv_total;
 
 };
 

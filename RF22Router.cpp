@@ -14,7 +14,18 @@
 #include <RF22Router.h>
 #include <SPI.h>
 
+
+#define DELAY_TIME 0
+
+extern void freeMem( char* message, int delay_time = DELAY_TIME );
+extern void freeMem( char letter, int delay_time = DELAY_TIME );
+extern void freeMem( int val, int delay_time = DELAY_TIME );
+extern void freeMem( const __FlashStringHelper *message, int delay_time = DELAY_TIME );
+
+
+
 RF22Router::RoutedMessage RF22Router::_tmpMessage;
+uint8_t RF22Router::global_msg_buffer[ GLOBAL_BUFFER_SIZE ];
 
 ////////////////////////////////////////////////////////////////////
 // Constructors
@@ -154,6 +165,8 @@ void RF22Router::clearRoutingTable()
 
 uint8_t RF22Router::sendtoWait(uint8_t* buf, uint8_t len, uint8_t dest)
 {
+
+    
     return sendtoWait(buf, len, dest, _thisAddress);
 }
 
@@ -161,8 +174,9 @@ uint8_t RF22Router::sendtoWait(uint8_t* buf, uint8_t len, uint8_t dest)
 // Waits for delivery to the next hop (but not for delivery to the final destination)
 uint8_t RF22Router::sendtoWait(uint8_t* buf, uint8_t len, uint8_t dest, uint8_t source)
 {
-    if (((uint16_t)len + sizeof(RoutedMessageHeader)) > RF22_MAX_MESSAGE_LEN)
+    if (((uint16_t)len + sizeof(RoutedMessageHeader)) > RF22_MAX_MESSAGE_LEN) {
 	return RF22_ROUTER_ERROR_INVALID_LENGTH;
+    }
 
     // Construct a RF22 RouterMessage message
     _tmpMessage.header.source = source;
@@ -183,8 +197,9 @@ uint8_t RF22Router::route(RoutedMessage* message, uint8_t messageLen)
     if (message->header.dest != RF22_BROADCAST_ADDRESS)
     {
 	RoutingTableEntry* route = getRouteTo(message->header.dest);
-	if (!route)
+	if (!route) {
 	    return RF22_ROUTER_ERROR_NO_ROUTE;
+        }
 	next_hop = route->next_hop;
     }
 
@@ -299,4 +314,28 @@ boolean RF22Router::recvfromAckTimeout(uint8_t* buf, uint8_t* len, uint16_t time
     }
     return false;
 }
+
+
+
+
+void RF22Router::build_msg( uint8_t *buf, uint8_t type, uint8_t *msg, uint8_t len ) {
+
+    buf[0] = (uint8_t) type;
+    buf[1] = (uint8_t) me;
+    buf[2] = len;
+    for( int buf_idx = 3, msg_idx = 0; msg_idx < len; msg_idx++, buf_idx++ ) {
+        buf[buf_idx] = msg[msg_idx];
+    }
+}
+
+void RF22Router::break_msg( uint8_t *buf, uint8_t *type, uint8_t *msg, uint8_t *len ) {
+
+    *type = buf[0];
+    *len = buf[2];
+    for( int buf_idx = 3, msg_idx = 0; msg_idx < *len; msg_idx++, buf_idx++ ) {
+        msg[msg_idx] = buf[buf_idx];
+    }
+
+}    
+
 

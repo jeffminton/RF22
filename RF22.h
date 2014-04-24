@@ -1164,6 +1164,7 @@ protected:
     void           restartTransmit();
 
 protected:
+    //2B
     GenericSPIClass*    _spi;
 
     /// Low level interrupt service routine for RF22 connected to interrupt 0
@@ -1176,30 +1177,47 @@ protected:
     static void         isr2();
 
     /// Array of instances connected to interrupts 0 and 1
+    //4B
     static RF22*        _RF22ForInterrupt[];
 
+    //1B
     volatile uint8_t    _mode; // One of RF22_MODE_*
 
+    //1B
     uint8_t             _idleMode;
+    //1B
     uint8_t             _slaveSelectPin;
+    //1B
     uint8_t             _interrupt;
+    //1B
     uint8_t             _deviceType;
 
     // These volatile members may get changed in the interrupt service routine
+    //1B
     volatile uint8_t    _bufLen;
+    //50B
     uint8_t             _buf[RF22_MAX_MESSAGE_LEN];
 
+    //1B
     volatile boolean    _rxBufValid;
 
+    //1B
     volatile boolean    _txPacketSent;
+    //1B
     volatile uint8_t    _txBufSentIndex;
   
+    //2B
     volatile uint16_t   _rxBad;
+    //2B
     volatile uint16_t   _rxGood;
+    //2B
     volatile uint16_t   _txGood;
 
+    //1B
     volatile uint8_t    _lastRssi;
 };
+
+//68B
 
 /// @example rf22_client.pde
 /// Client side of simple client/server pair using RF22 class

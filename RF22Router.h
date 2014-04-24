@@ -25,7 +25,10 @@
 
 // This size of RF22_ROUTER_MAX_MESSAGE_LEN is OK for Arduino Mega, but too big for
 // Duemilanova. Size of 50 works with the sample router programs on Duemilanova.
+// 50B - 5B
+// 45B
 #define RF22_ROUTER_MAX_MESSAGE_LEN (RF22_MAX_MESSAGE_LEN - sizeof(RF22Router::RoutedMessageHeader))
+#define GLOBAL_BUFFER_SIZE 0xFF
 //#define RF22_ROUTER_MAX_MESSAGE_LEN 50
 
 // These allow us to define a simulated network topology for testing purposes
@@ -133,8 +136,12 @@ class RF22Router : public RF22ReliableDatagram
 {
 public:
 
+    //255B
+    static uint8_t global_msg_buffer[ GLOBAL_BUFFER_SIZE ];
+
     /// Defines the structure of the RF22Router message header, used to keep track of end-to-end delivery
     /// parameters
+    //5B - unaloc
     typedef struct
     {
 	uint8_t    dest;       ///< Destination node address
@@ -146,13 +153,16 @@ public:
     } RoutedMessageHeader;
 
     /// Defines the structure of a RF22Router message
+    //51B - unalloc
     typedef struct
     {
 	RoutedMessageHeader header;    ///< end-to-end delivery header
+        //45B
 	uint8_t             data[RF22_ROUTER_MAX_MESSAGE_LEN]; ///< Applicaiton payload data
     } RoutedMessage;
 
     /// Values for the possible states for routes
+    //4B - unalloc
     typedef enum
     {
 	Invalid = 0,           ///< No valid route is known
@@ -161,6 +171,7 @@ public:
     } RouteState;
 
     /// Defines an entry in the routing table
+    //3B unalloc
     typedef struct
     {
 	uint8_t      dest;      ///< Destination node address
@@ -282,7 +293,17 @@ public:
     /// \return true if a valid message was copied to buf
     boolean recvfromAckTimeout(uint8_t* buf, uint8_t* len,  uint16_t timeout, uint8_t* source = NULL, uint8_t* dest = NULL, uint8_t* id = NULL, uint8_t* flags = NULL);
 
+
+
+
 protected:
+
+
+    void build_msg( uint8_t *buf, uint8_t type, uint8_t *msg, uint8_t len );
+
+
+    void break_msg( uint8_t *buf, uint8_t *type, uint8_t *msg, uint8_t *len );
+
 
     /// Lets sublasses peek at messages going 
     /// past before routing or local delivery.
@@ -298,6 +319,8 @@ protected:
     /// \param [in] messageLen Length of message in octets
     virtual uint8_t route(RoutedMessage* message, uint8_t messageLen);
 
+    
+
     /// Deletes a specific rout entry from therouting table
     /// \param [in] index The 0 based index of the routing table entry to delete
     void deleteRoute(uint8_t index);
@@ -308,16 +331,31 @@ protected:
 
     /// The maximum number of hops permitted in routed messages.
     /// If a routed message would exceed this number of hops it is dropped and ignored.
+    //1B
     uint8_t              _max_hops;
+
+    /// Unique identy for node used in addition to address
+    //1B
+    uint8_t me;
+
 
 private:
 
     /// Temporary mesage buffer
+    //51B
     static RoutedMessage _tmpMessage;
 
     /// Local routing table
+    //3B * 10
+    //30B
     RoutingTableEntry    _routes[RF22_ROUTING_TABLE_SIZE];
 };
+
+//1
+//255B
+// 81B+
+//  3B+
+//339B
 
 #endif
 

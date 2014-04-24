@@ -124,28 +124,35 @@ protected:
 
 private:
     /// Count of retransmissions we have had to send
+    //2B
     uint16_t _retransmissions;
 
     /// The last sequence number to be used
     /// Defaults to 0
+    //1B
     uint8_t _lastSequenceNumber;
 
     // Retransmit timeout (milliseconds)
     /// Defaults to 200
+    //2B
     uint16_t _timeout;
 
     // Retries (0 means one try only)
     /// Defaults to 3
+    //1B
     uint8_t _retries;
 
     /// Array of the last seen sequence number indexed by node address that sent it
     /// It is used for duplicate detection. Duplicated messages are re-acknowledged when received 
     /// (this is generally due to lost ACKs, causing the sender to retransmit, even though we have already
     /// received that message)
-    uint8_t _seenIds[256];
+    //256B
+    uint8_t _seenIds[64];
 
 
 };
+
+//7B
 
 #endif
 

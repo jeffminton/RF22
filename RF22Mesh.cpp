@@ -13,6 +13,21 @@
 
 #include <RF22Mesh.h>
 #include <SPI.h>
+#include <aJSON.h>
+#include <MemoryFree.h>
+#include <LiquidCrystal.h>
+
+#define DELAY_TIME 0
+#define CLIENT
+
+extern void freeMem( char* message, int delay_time = DELAY_TIME );
+extern void freeMem( char letter, int delay_time = DELAY_TIME );
+extern void freeMem( int val, int delay_time = DELAY_TIME );
+extern void freeMem( const __FlashStringHelper *message, int delay_time = DELAY_TIME );
+
+#ifndef CLIENT
+extern LiquidCrystal lcd;
+#endif
 
 uint8_t RF22Mesh::_tmpMessage[RF22_ROUTER_MAX_MESSAGE_LEN];
 
@@ -26,28 +41,87 @@ RF22Mesh::RF22Mesh(uint8_t thisAddress, uint8_t slaveSelectPin, uint8_t interrup
 ////////////////////////////////////////////////////////////////////
 // Public methods
 
+boolean RF22Mesh::init()
+{
+    boolean ret = RF22Router::init();
+    if( ret && _thisAddress == 0 ) {
+        return get_address();
+    }
+}
+
 ////////////////////////////////////////////////////////////////////
 // Discovers a route to the destination (if necessary), sends and 
 // waits for delivery to the next hop (but not for delivery to the final destination)
 uint8_t RF22Mesh::sendtoWait(uint8_t* buf, uint8_t len, uint8_t address)
 {
-    if (len > RF22_MESH_MAX_MESSAGE_LEN)
+    freeMem( F( "RF22Mesh::sendtoWait" ) );
+    uint8_t frags = 0, ret;
+    uint16_t frag_len = 0, len_remain = (uint16_t) len;
+
+
+
+    if (len > GLOBAL_BUFFER_SIZE)
 	return RF22_ROUTER_ERROR_INVALID_LENGTH;
 
-    RoutingTableEntry* route = getRouteTo(address);
-    if (!route && !doArp(address))
-	return RF22_ROUTER_ERROR_NO_ROUTE;
+    if( address != RF22_BROADCAST_ADDRESS ) {
+        RoutingTableEntry* route = getRouteTo(address);
+        if( !route && !doArp( address ) ) {
 
-    // Now have a route. Contruct an applicaiotn layer message and dend it via that route
-    MeshApplicationMessage* a = (MeshApplicationMessage*)&_tmpMessage;
-    a->header.msgType = RF22_MESH_MESSAGE_TYPE_APPLICATION;
-    memcpy(a->data, buf, len);
-    return RF22Router::sendtoWait(_tmpMessage, sizeof(RF22Mesh::MeshMessageHeader) + len, address);
+            return RF22_ROUTER_ERROR_NO_ROUTE;
+        }
+    }
+
+    frags = ( len / RF22_MESH_MAX_MESSAGE_LEN ) + 1;
+    #ifdef CLIENT
+    Serial.print( F( "frags: " ) );
+    Serial.println( frags );
+    #endif
+
+    for( uint8_t i = 0; i < frags; i++ ) {
+
+        // Now have a route. Contruct an applicaiotn layer message and dend it via that route
+        MeshApplicationMessage* a = (MeshApplicationMessage*)&_tmpMessage;
+        a->header.msgType = RF22_MESH_MESSAGE_TYPE_APPLICATION;
+
+        if( i < frags - 1 ) {
+            a->header.frag = 1;
+            frag_len = RF22_MESH_MAX_MESSAGE_LEN;
+            len_remain -= frag_len;
+        } else {
+            a->header.frag = 0;
+            frag_len = len_remain;
+            len_remain -= frag_len;
+            //frag_len = len < ( frags * RF22_MESH_MAX_MESSAGE_LEN ) ? len : len - ( frags * RF22_MESH_MAX_MESSAGE_LEN );
+        }
+        #ifdef CLIENT
+        Serial.print( F( "frag_len: " ) );
+        Serial.println( frag_len );
+        #endif
+        a->header.seqno = i;
+
+        memcpy( a->data, buf + ( i * RF22_MESH_MAX_MESSAGE_LEN ), frag_len );
+        #ifdef CLIENT
+        for( int i = 0; i < frag_len; i++ ) {
+            Serial.print( a->data[i], HEX );
+            Serial.print( F( ", " ) );
+        }
+        Serial.println( F( "" ) );
+        #endif
+
+        ret = RF22Router::sendtoWait(_tmpMessage, sizeof(RF22Mesh::MeshMessageHeader) + frag_len, address);
+        if( ret != RF22_ROUTER_ERROR_NONE ) {
+
+            return ret;
+        }
+
+    }
+    return 0;
 }
 
 ////////////////////////////////////////////////////////////////////
 boolean RF22Mesh::doArp(uint8_t address)
 {
+
     // Need to discover a route
     // Broadcast a route discovery message with nothing in it
     MeshRouteDiscoveryMessage* p = (MeshRouteDiscoveryMessage*)&_tmpMessage;
@@ -55,8 +129,9 @@ boolean RF22Mesh::doArp(uint8_t address)
     p->destlen = 1; 
     p->dest = address; // Who we are looking for
     uint8_t error = RF22Router::sendtoWait((uint8_t*)p, sizeof(RF22Mesh::MeshMessageHeader) + 2, RF22_BROADCAST_ADDRESS);
-    if (error !=  RF22_ROUTER_ERROR_NONE)
+    if (error !=  RF22_ROUTER_ERROR_NONE) {
 	return false;
+    }
     
     // Wait for a reply, which will be unicast back to us
     // It will contain the complete route to the destination
@@ -153,73 +228,154 @@ boolean RF22Mesh::recvfromAck(uint8_t* buf, uint8_t* len, uint8_t* source, uint8
     uint8_t _dest;
     uint8_t _id;
     uint8_t _flags;
-    if (RF22Router::recvfromAck(_tmpMessage, &tmpMessageLen, &_source, &_dest, &_id, &_flags))
-    {
-	MeshMessageHeader* p = (MeshMessageHeader*)&_tmpMessage;
+    uint8_t frags = 0;
+    uint8_t offset = 0;
+    uint8_t total_len = 0;
+    uint8_t seq_no = 0;
+    uint8_t x = 0, y = 0;
+    uint8_t loop_once = 1;
+    uint8_t have_message = 0;
 
-	if (   tmpMessageLen >= 1 
-	    && p->msgType == RF22_MESH_MESSAGE_TYPE_APPLICATION)
-	{
-	    MeshApplicationMessage* a = (MeshApplicationMessage*)p;
-	    // Handle application layer messages, presumably for our caller
-	    if (source) *source = _source;
-	    if (dest)   *dest   = _dest;
-	    if (id)     *id     = _id;
-	    if (flags)  *flags  = _flags;
-	    uint8_t msgLen = tmpMessageLen - sizeof(MeshMessageHeader);
-	    if (*len > msgLen)
-		*len = msgLen;
-	    memcpy(buf, a->data, *len);
-	    
-	    return true;
-	}
-	else if (   _dest == RF22_BROADCAST_ADDRESS 
-		 && tmpMessageLen > 1 
-		 && p->msgType == RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_REQUEST)
-	{
-	    MeshRouteDiscoveryMessage* d = (MeshRouteDiscoveryMessage*)p;
-	    // Handle Route discovery requests
-	    // Message is an array of node addresses the route request has already passed through
-	    // If it originally came from us, ignore it
-	    if (_source == _thisAddress)
-		return false;
-	    
-	    uint8_t numRoutes = tmpMessageLen - sizeof(MeshMessageHeader) - 2;
-	    uint8_t i;
-	    // Are we already mentioned?
-	    for (i = 0; i < numRoutes; i++)
-		if (d->route[i] == _thisAddress)
-		    return false; // Already been through us. Discard
-	    
-	    // Hasnt been past us yet, record routes back to the earlier nodes
-	    addRouteTo(_source, headerFrom()); // The originator
-	    for (i = 0; i < numRoutes; i++)
-		addRouteTo(d->route[i], headerFrom());
-	    if (isPhysicalAddress(&d->dest, d->destlen))
-	    {
-		// This route discovery is for us. Unicast the whole route back to the originator
-		// as a RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_RESPONSE
-		// We are certain to have a route there, becuase we just got it
-		d->header.msgType = RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_RESPONSE;
-		RF22Router::sendtoWait((uint8_t*)d, tmpMessageLen, _source);
-	    }
-	    else if (i < _max_hops)
-	    {
-		// Its for someone else, rebroadcast it, after adding ourselves to the list
-		d->route[numRoutes] = _thisAddress;
-		tmpMessageLen++;
-		// Have to impersonate the source
-		// REVISIT: if this fails what can we do?
-		RF22Router::sendtoWait(_tmpMessage, tmpMessageLen, RF22_BROADCAST_ADDRESS, _source);
-	    }
-	}
+    #ifndef CLIENT
+    lcd.begin( 20, 4 );
+    lcd.clear();
+    #endif
+
+    while( frags > 0 || loop_once == 1 ) {
+        loop_once = 0;
+        if (RF22Router::recvfromAck(_tmpMessage, &tmpMessageLen, &_source, &_dest, &_id, &_flags))
+        {
+            MeshMessageHeader* p = (MeshMessageHeader*)&_tmpMessage;
+
+            if (   tmpMessageLen >= 1 
+                && p->msgType == RF22_MESH_MESSAGE_TYPE_APPLICATION)
+            {
+                have_message = 1;
+
+                MeshApplicationMessage* a = (MeshApplicationMessage*)p;
+                // Handle application layer messages, presumably for our caller
+
+                if (source) *source = _source;
+                if (dest)   *dest   = _dest;
+                if (id)     *id     = _id;
+                if (flags)  *flags  = _flags;
+                uint8_t msgLen = tmpMessageLen - sizeof(MeshMessageHeader);
+                if (*len > msgLen)
+                    *len = msgLen;
+
+                frags = a->header.frag;
+                #ifdef CLIENT
+                Serial.print( F( "RF22Mesh::recvfromAck frags: " ) );
+                Serial.println( frags );
+                #endif
+
+
+
+                seq_no = a->header.seqno;
+                if( frags > 0 || (frags == 0 && a->header.seqno > 0 ) ) {
+                    offset = a->header.seqno * RF22_MESH_MAX_MESSAGE_LEN;
+                }
+
+                #ifdef CLIENT
+                for( int i = 0; i < *len; i++ ) {
+                    Serial.print( a->data[i] );
+                    Serial.print( F( ", " ) );
+                }
+                Serial.println( F( "" ) );
+                #endif
+                
+                memcpy( buf + offset, a->data, *len );
+
+                #ifndef CLIENT
+                lcd.setCursor( x, y );
+                lcd.print( *len );
+                if( ( x + 8 ) > 20 ) {
+                    y++;
+                    x = 0;
+                } else {
+                    x += 4;
+                }
+                #endif
+
+            }
+            else if (   _dest == RF22_BROADCAST_ADDRESS 
+                     && tmpMessageLen > 1 
+                     && p->msgType == RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_REQUEST)
+            {
+                MeshRouteDiscoveryMessage* d = (MeshRouteDiscoveryMessage*)p;
+                // Handle Route discovery requests
+                // Message is an array of node addresses the route request has already passed through
+                // If it originally came from us, ignore it
+                if (_source == _thisAddress)
+                    return false;
+                
+                uint8_t numRoutes = tmpMessageLen - sizeof(MeshMessageHeader) - 2;
+                uint8_t i;
+                // Are we already mentioned?
+                for (i = 0; i < numRoutes; i++)
+                    if (d->route[i] == _thisAddress)
+                        return false; // Already been through us. Discard
+                
+                // Hasnt been past us yet, record routes back to the earlier nodes
+                addRouteTo(_source, headerFrom()); // The originator
+                for (i = 0; i < numRoutes; i++)
+                    addRouteTo(d->route[i], headerFrom());
+                if (isPhysicalAddress(&d->dest, d->destlen))
+                {
+                    // This route discovery is for us. Unicast the whole route back to the originator
+                    // as a RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_RESPONSE
+                    // We are certain to have a route there, becuase we just got it
+                    d->header.msgType = RF22_MESH_MESSAGE_TYPE_ROUTE_DISCOVERY_RESPONSE;
+                    RF22Router::sendtoWait((uint8_t*)d, tmpMessageLen, _source);
+                }
+                else if (i < _max_hops)
+                {
+                    // Its for someone else, rebroadcast it, after adding ourselves to the list
+                    d->route[numRoutes] = _thisAddress;
+                    tmpMessageLen++;
+                    // Have to impersonate the source
+                    // REVISIT: if this fails what can we do?
+                    RF22Router::sendtoWait(_tmpMessage, tmpMessageLen, RF22_BROADCAST_ADDRESS, _source);
+                }
+            }
+        } else if( frags == 0 ) {
+            return false;
+        } else {
+            #ifdef CLIENT
+            Serial.print( F( "corner case: frags: " ) );
+            Serial.print( frags );
+            Serial.print( F( "loop_once: " ) );
+            Serial.println( loop_once );
+            #endif
+        }
     }
-    return false;
+
+    if( have_message == 1 ) {
+        *len = *len + ( seq_no * RF22_MESH_MAX_MESSAGE_LEN );
+
+        #ifdef CLIENT
+        Serial.print( F( "if have_message: frags: " ) );
+        Serial.print( frags );
+        Serial.print( F( "loop_once: " ) );
+        Serial.println( loop_once );
+        #endif
+
+        #ifndef CLIENT
+        lcd.setCursor( x, y );
+        lcd.print( "t" );
+        lcd.print( *len );
+        #endif
+
+        return true;
+    } else {
+        return false;
+    }
 }
 
 ////////////////////////////////////////////////////////////////////
 boolean RF22Mesh::recvfromAckTimeout(uint8_t* buf, uint8_t* len, uint16_t timeout, uint8_t* from, uint8_t* to, uint8_t* id, uint8_t* flags)
 {  
+    freeMem( F( "RF22Mesh::recvfromAckTimeout" ) );
     unsigned long starttime = millis();
     while ((millis() - starttime) < timeout)
     {
@@ -230,4 +386,79 @@ boolean RF22Mesh::recvfromAckTimeout(uint8_t* buf, uint8_t* len, uint16_t timeou
 }
 
 
+
+////////////////////////////////////////////////////////////////////
+void RF22Mesh::clear_buf( uint8_t *buf, int size ) {
+    for( int i = 0; i < size; i++ ) {
+        buf[i] = 0;
+    }
+}
+
+
+
+////////////////////////////////////////////////////////////////////
+boolean RF22Mesh::get_address() {
+    uint8_t ret, len = GLOBAL_BUFFER_SIZE, source, dest, new_address = 0;
+    int temp_type = -1, temp_me = -1;
+    char *json_str;
+    unsigned long starttime;
+    boolean recv_ret;
+    aJsonObject *root, *item;
+
+    randomSeed( analogRead( 1 ) );
+
+    me = (uint8_t) random( 256 );
+
+    #ifdef CLIENT
+    Serial.println( F( "This is the client" ) );
+    #endif
+
+    while( new_address == 0 ) {
+
+        root = aJson.createObject();
+        aJson.addNumberToObject( root, F( "t" ), (uint8_t) ADDRESS_REQUEST );
+        aJson.addNumberToObject( root, F( "m" ), (uint8_t) me );
+        json_str = aJson.print( root );
+
+        ret = sendtoWait( (uint8_t *) json_str, strlen( json_str ), RF22_BROADCAST_ADDRESS );
+
+        if( ret != RF22_ROUTER_ERROR_NONE ) {
+            Serial.print( F( "Error Code: " ) );
+            Serial.println( ret );
+            errno = ret;
+            //return 0;
+        }
+
+        aJson.deleteItem( root );
+        free( json_str );
+
+        starttime = millis();
+
+        for( int i = 0; i < 4 && new_address == 0; i++ ) {
+            if( recvfromAckTimeout( global_msg_buffer, &len, 1000,  &source, &dest ) )
+            {
+                root = aJson.parse( (char *) global_msg_buffer );
+                item = aJson.getObjectItem( root, F( "t" ) );
+                if( item ) {
+                    temp_type = item->valueint;
+                }
+                item = aJson.getObjectItem( root, F( "m" ) );
+                if( item ) {
+                    temp_me = item->valueint;
+                }
+                if( temp_type == ADDRESS_GRANT && temp_me == me ) 
+                {
+                    new_address = aJson.getObjectItem( root, F( "a" ) )->valueint;
+                    setThisAddress( new_address );
+                    server_address = source;
+                    return 1;
+                }
+                aJson.deleteItem( root );
+            }
+        }
+    }
+
+    return 1;
+
+}
 

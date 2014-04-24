@@ -41,6 +41,10 @@ public:
     /// \param[in] thisAddress The address of this node
     void setThisAddress(uint8_t thisAddress);
 
+    /// Gets the address of this node. Defaults to 0. 
+    /// \return thisAddress The address of this node
+    uint8_t getThisAddress();
+
     /// Sends a message to the node(s) with the given address
     /// RF22_BROADCAST_ADDRESS is a valid address which will cause the message
     /// to be accepted by all RF22Datagram nodes within range.
@@ -69,8 +73,11 @@ public:
 
 protected:
     /// The address of this node. Defaults to 0.
+    //1B
     uint8_t _thisAddress;
 
 };
+
+//1B
 
 #endif
